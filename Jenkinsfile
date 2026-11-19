@@ -36,7 +36,7 @@ pipeline {
 
         stage('3. Pruebas de Seguridad (OWASP ZAP)') {
             steps {
-                echo '=== Levantando entorno de pruebas y ejecutando OWASP ZAP ==='
+                echo '=== Levantando entorno de pruebas y ejecutando escaneo activo OWASP ZAP ==='
                 sh '''
                     # Limpiar contenedores previos de pruebas si existen
                     docker rm -f ${APP_NAME}-test zap-scanner || true
@@ -47,20 +47,21 @@ pipeline {
 
                     # Obtener la IP interna del contenedor para escanearlo
                     TEST_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${APP_NAME}-test)
-                    echo "Ejecutando escaneo OWASP ZAP sobre http://${TEST_IP}:5000 ..."
+                    echo "Ejecutando OWASP ZAP Full Scan (Activo) sobre http://${TEST_IP}:5000/dashboard ..."
 
-                    # Ejecutar OWASP ZAP Baseline
+                    # Ejecutar escaneo activo con cookie de sesión para auditar /dashboard, /update_bio y /login
                     docker run --name zap-scanner -u root \
-                        ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
-                        -t http://${TEST_IP}:5000 \
+                        ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+                        -t http://${TEST_IP}:5000/dashboard \
                         -r reporte_owasp_zap.html \
+                        -z "-config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=user_session=admin" \
                         -I || true
 
-                    # Extraer el reporte HTML directamente al workspace de Jenkins
+                    # Extraer el reporte HTML al workspace de Jenkins
                     mkdir -p zap-reports
                     docker cp zap-scanner:/zap/wrk/reporte_owasp_zap.html zap-reports/reporte_owasp_zap.html || true
 
-                    # Limpiar contenedores temporales de pruebas
+                    # Limpiar contenedores temporales
                     docker rm -f ${APP_NAME}-test zap-scanner || true
                 '''
             }
@@ -70,10 +71,7 @@ pipeline {
             steps {
                 echo '=== Desplegando contenedor en Producción ==='
                 sh '''
-                    # Detener y reemplazar despliegue anterior en producción
                     docker rm -f ${APP_NAME}-prod || true
-
-                    # Levantar contenedor en producción en el puerto 5050
                     docker run -d --name ${APP_NAME}-prod --restart unless-stopped -p ${PROD_PORT}:5000 ${IMAGE_NAME}
                     sleep 3
 
