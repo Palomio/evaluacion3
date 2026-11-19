@@ -49,21 +49,26 @@ pipeline {
 
                     # Obtener la IP interna del contenedor
                     TEST_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${APP_NAME}-test)
-                    echo "Ejecutando OWASP ZAP Full Scan sobre http://${TEST_IP}:5000 ..."
+                    echo "Ejecutando OWASP ZAP Full Scan (1 min max) sobre http://${TEST_IP}:5000 ..."
 
-                    # Ejecutar escaneo activo con /zap/wrk montado y sesión activa
-                    docker run --rm --name zap-scanner \
+                    # Ejecutar escaneo activo con permisos de escritura (-u root) y límites de memoria/tiempo
+                    docker run --rm --name zap-scanner -u root \
+                        -e _JAVA_OPTIONS="-Xmx1024m" \
                         -v zap_wrk_vol:/zap/wrk \
                         ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
                         -t http://${TEST_IP}:5000 \
                         -r reporte_owasp_zap.html \
-                        -z "-config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=user_session=admin" \
+                        -m 1 \
+                        -z "-config scanner.maxRuleDurationInMins=1 -config scanner.maxScanDurationInMins=1 -config scanner.threadPerHost=2 -config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=user_session=admin" \
                         -I || true
 
-                    # Extraer el reporte HTML desde el volumen al workspace de Jenkins
+                    # Extraer el reporte HTML al workspace de Jenkins y verificar su tamaño
                     mkdir -p zap-reports
-                    docker run --rm -v zap_wrk_vol:/zap/wrk ghcr.io/zaproxy/zaproxy:stable \
+                    docker run --rm -u root -v zap_wrk_vol:/zap/wrk ghcr.io/zaproxy/zaproxy:stable \
                         cat /zap/wrk/reporte_owasp_zap.html > zap-reports/reporte_owasp_zap.html || true
+
+                    echo "=== Tamaño del reporte generado ==="
+                    ls -lh zap-reports/reporte_owasp_zap.html
 
                     # Limpiar contenedor temporal y volumen
                     docker rm -f ${APP_NAME}-test || true
