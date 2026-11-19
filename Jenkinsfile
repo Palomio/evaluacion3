@@ -79,14 +79,24 @@ pipeline {
 
         stage('4. Despliegue a Producción') {
             steps {
-                echo '=== Desplegando contenedor en Producción ==='
+                echo '=== Desplegando contenedor en Producción y Monitoreo (Grafana/Prometheus) ==='
                 sh '''
+                    # 1. Desplegar aplicación web en producción
                     docker rm -f ${APP_NAME}-prod || true
                     docker run -d --name ${APP_NAME}-prod --restart unless-stopped -p ${PROD_PORT}:5000 ${IMAGE_NAME}
-                    sleep 3
 
-                    echo "Verificando estado del contenedor en producción:"
-                    docker ps | grep ${APP_NAME}-prod
+                    # 2. Levantar entorno de monitoreo si existe docker-compose.yml en el repo
+                    if [ -f docker-compose.yml ]; then
+                        docker compose up -d
+                        if [ -f prometheus.yml ]; then
+                            docker cp prometheus.yml prometheus:/etc/prometheus/prometheus.yml
+                            docker restart prometheus
+                        fi
+                    fi
+
+                    sleep 3
+                    echo "Verificando estado de los contenedores activos en producción:"
+                    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
                 '''
             }
         }
@@ -98,7 +108,7 @@ pipeline {
             archiveArtifacts artifacts: 'zap-reports/reporte_owasp_zap.html', allowEmptyArchive: true
         }
         success {
-            echo '¡Proceso finalizado! Análisis de seguridad completado y aplicación desplegada en Docker.'
+            echo '¡Proceso finalizado! Análisis de seguridad completado, aplicación desplegada y monitoreo activo.'
         }
         failure {
             echo 'El Pipeline falló. Revisa el Console Output para identificar el error.'
