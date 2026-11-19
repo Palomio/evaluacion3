@@ -38,31 +38,36 @@ pipeline {
             steps {
                 echo '=== Levantando entorno de pruebas y ejecutando escaneo activo OWASP ZAP ==='
                 sh '''
-                    # Limpiar contenedores previos de pruebas si existen
+                    # Limpiar contenedores y volumen temporal previos
                     docker rm -f ${APP_NAME}-test zap-scanner || true
+                    docker volume rm zap_wrk_vol || true
+                    docker volume create zap_wrk_vol
 
                     # Desplegar contenedor temporal para análisis dinámico (DAST)
                     docker run -d --name ${APP_NAME}-test -p ${TEST_PORT}:5000 ${IMAGE_NAME}
                     sleep 5
 
-                    # Obtener la IP interna del contenedor para escanearlo
+                    # Obtener la IP interna del contenedor
                     TEST_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${APP_NAME}-test)
-                    echo "Ejecutando OWASP ZAP Full Scan (Activo) sobre http://${TEST_IP}:5000/dashboard ..."
+                    echo "Ejecutando OWASP ZAP Full Scan sobre http://${TEST_IP}:5000 ..."
 
-                    # Ejecutar escaneo activo con cookie de sesión para auditar /dashboard, /update_bio y /login
-                    docker run --name zap-scanner -u root \
+                    # Ejecutar escaneo activo con /zap/wrk montado y sesión activa
+                    docker run --rm --name zap-scanner \
+                        -v zap_wrk_vol:/zap/wrk \
                         ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
-                        -t http://${TEST_IP}:5000/dashboard \
+                        -t http://${TEST_IP}:5000 \
                         -r reporte_owasp_zap.html \
                         -z "-config replacer.full_list(0).description=auth -config replacer.full_list(0).enabled=true -config replacer.full_list(0).matchtype=REQ_HEADER -config replacer.full_list(0).matchstr=Cookie -config replacer.full_list(0).regex=false -config replacer.full_list(0).replacement=user_session=admin" \
                         -I || true
 
-                    # Extraer el reporte HTML al workspace de Jenkins
+                    # Extraer el reporte HTML desde el volumen al workspace de Jenkins
                     mkdir -p zap-reports
-                    docker cp zap-scanner:/zap/wrk/reporte_owasp_zap.html zap-reports/reporte_owasp_zap.html || true
+                    docker run --rm -v zap_wrk_vol:/zap/wrk ghcr.io/zaproxy/zaproxy:stable \
+                        cat /zap/wrk/reporte_owasp_zap.html > zap-reports/reporte_owasp_zap.html || true
 
-                    # Limpiar contenedores temporales
-                    docker rm -f ${APP_NAME}-test zap-scanner || true
+                    # Limpiar contenedor temporal y volumen
+                    docker rm -f ${APP_NAME}-test || true
+                    docker volume rm zap_wrk_vol || true
                 '''
             }
         }
